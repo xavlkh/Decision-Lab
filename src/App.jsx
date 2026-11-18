@@ -88,7 +88,7 @@ export default function App() {
         ok: true,
         message: `${
           effectiveKey ? 'Connected' : 'Connected via server proxy'
-        } in ${formatMs(result.elapsedMs)} Â· ${formatTokens(
+        } in ${formatMs(result.elapsedMs)} · ${formatTokens(
           result.usage?.total_input_tokens ?? 0,
         )} input tokens`,
       })
@@ -138,7 +138,7 @@ export default function App() {
             <Badge variant="outline" className="font-mono">
               gemini-decision-1
             </Badge>
-            <span className="text-[11px] text-muted-foreground">Decisions API Â· v1beta</span>
+            <span className="text-[11px] text-muted-foreground">Decisions API · v1beta</span>
           </div>
         </div>
       </header>
@@ -168,7 +168,7 @@ export default function App() {
               </TabsTrigger>
             </TabsList>
             <p className="text-xs text-muted-foreground">
-              $0.10 / 1M input tokens Â· output tokens always 0
+              $0.10 / 1M input tokens · output tokens always 0
             </p>
           </div>
 
