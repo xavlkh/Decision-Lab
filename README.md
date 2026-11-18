@@ -1,16 +1,104 @@
-# React + Vite
+# Gemini Decision Lab
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A local test harness for Google's `gemini-decision-1` model on the **Decisions API**. Built with Vite, React, Tailwind CSS v4, and shadcn/ui.
 
-Currently, two official plugins are available:
+The Decisions API returns calibrated probabilities instead of generated text. This app exercises all three question types (`noul`, `choice`, `score`) and scores the model against a labeled banking triage suite.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Setup
 
-## React Compiler
+1. Create a Gemini API key at <https://aistudio.google.com/api-keys>.
+2. Add it to `.env` (already gitignored) or paste it into the app's key bar:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+   ```bash
+   VITE_GEMINI_API_KEY=AIza...
+   ```
 
-## Expanding the Oxlint configuration
+3. Install and run:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+   ```bash
+   npm install
+   npm run dev
+   ```
+
+4. Open <http://localhost:5173>.
+
+The UI value wins over `.env`. A key pasted into the UI is stored in `sessionStorage` and disappears when the tab closes.
+
+## What to try
+
+- **Playground** — edit the shared input, attach up to five photos or PDFs, and run one request. Each answer shows the value, confidence, and full probability distribution.
+- **Documents** — attach up to 20 PDFs or photos and classify each in its own request. Choose 1, 2, 3, or 5 parallel runs; results show completion, category, action, confidence, latency, and tokens per file. Preview images inline and PDFs in the browser viewer.
+- **Benchmark** — run 10 built-in support cases plus your own. It reports case accuracy, question accuracy, confidence calibration, latency, token usage, and estimated cost. Set repeats to 3 or 5 to check consistency. Preview any case's full input, expected answers, and questions.
+- **Request log** — inspect the last 20 request/response pairs. The key is never included, and attached media is shown as a size placeholder instead of raw base64.
+
+## OCBC form template
+
+The default Playground preset checks whether a document is an OCBC personal banking form, whether it is filled in, and then categorises it into:
+
+- `account`
+- `credit_card`
+- `debit_card`
+- `baby_bonus_card`
+- `loans`
+- `online_banking`
+
+It also classifies the action (`apply`, `change`, `cancel`, `reissue`, `enrol`, `request`, `repay`, `other`). **Filled** means every field the form asks the applicant to complete has been completed, including a signature and date where required. Blank or partially completed forms are reported as not filled. The categories and form examples follow the **Find the forms you need** list on OCBC's Help and Support page. The template lives in `src/lib/ocbc-form-template.js`; attach a photo or PDF of the form, or paste its text.
+
+## Documents (per-file runs)
+
+The **Documents** tab sends every file as a separate Decisions API request using the OCBC form template. It is not a single combined batch.
+
+- Up to 20 files, 15 MB each.
+- Parallel runs: 1, 2, 3 (default), or 5. Higher values use more quota and browser memory.
+- **Preview** opens images inline and PDFs in the browser's viewer, with the text prompt and question set alongside.
+- Results are per document: completion (complete/incomplete), category, action, OCBC-form check, review confidence, latency, and tokens.
+- **Low confidence only** filters files below 60% confidence.
+- **Copy CSV** and **Copy JSON** export the results; media data is never included.
+- There is no accuracy score because there are no ground-truth labels for arbitrary forms.
+
+## Custom benchmark cases
+
+The **Benchmark** tab has a **Your cases** section. Add a case, give it an input, choose a question set, and set the answers you expect. Custom cases run alongside the built-in triage suite and count toward the same accuracy, calibration, latency, token, and cost summary.
+
+- **Inputs:** text, one or more photos, one or more PDFs, or a combination. Attachments are sent as Decisions API media blocks.
+- **Question sets:**
+  - **Support triage** — `is_refund_request` (noul), `route_to` (choice), `urgency` (score).
+  - **OCBC form category** — `is_ocbc_form` (noul), `is_form_filled` (noul), `form_category` (choice), `form_action` (choice).
+- **Expected answers** are fixed by you, not self-reported by the model.
+- **Limits:** up to 5 files per case, 15 MB each, 30 MB total.
+- **Image detail:** `low`, `medium`, or `high` for image blocks.
+- **Persistence:** custom cases are saved in the browser (IndexedDB), including attached files, so they survive a reload. They never leave the browser except when a run is sent to the API.
+- **Preview** shows the full text, inline images or PDF viewer, expected answers, and question definitions.
+- Use **Edit** to change a case or **Delete** to remove it. Deleting is permanent for that browser.
+
+The built-in cases are text-only. Media support is available through custom cases and the Documents tab.
+
+## Deploy on Vercel
+
+This is a static Vite app. The repository includes `vercel.json`, which sets the Vite framework, build command, and output directory.
+
+- **Dashboard:** import the repository at <https://vercel.com/new>. Vercel uses `npm run build` and publishes `dist`.
+- **CLI:** run `npx vercel` from the project root for a preview, then `npx vercel --prod` for production.
+- **Environment variables:** none are required. Do not add `VITE_GEMINI_API_KEY` to Vercel. Production builds only expose `BUILD_*`, and visitors paste their own key into the key bar; it stays in `sessionStorage` for that tab.
+- `.vercelignore` excludes `.env`, `.env.*`, `node_modules`, and `dist` from CLI uploads.
+- The Decisions API allows browser requests from Vercel deployment origins, so no server proxy is needed for direct calls.
+
+For a shared key that every visitor can use, do not ship it to the browser. Use a server-side proxy with authentication, rate limits, and a spend cap.
+
+## Notes
+
+- Endpoint: `POST https://generativelanguage.googleapis.com/v1beta/decisions`
+- Model: `gemini-decision-1`
+- Pricing: $0.10 per 1M input tokens, output tokens are free.
+- `VITE_*` values are inlined into the client bundle. This is fine for local testing; don't deploy a real key.
+- Production builds expose only `BUILD_*` env vars, so `VITE_GEMINI_API_KEY` from `.env` is never inlined into `dist`.
+- The API supports images, audio, video, and PDFs. The Playground accepts **PNG, JPEG, WebP, HEIC, GIF, BMP, TIFF, and PDF**: up to 5 files, 15 MB each, 30 MB total. The Documents tab accepts up to 20 files, 15 MB each. Custom benchmark cases accept up to 5 files, 15 MB each, 30 MB total. Images use the selected `low` / `medium` / `high` detail level. Built-in benchmark cases remain text-only.
+
+## Scripts
+
+```bash
+npm run dev      # start Vite
+npm run build    # production build
+npm run lint     # oxlint
+npm run preview  # preview the build
+```
