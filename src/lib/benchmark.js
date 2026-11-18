@@ -1,5 +1,6 @@
 import { confidenceOf, estimateCost, topLevel } from './decisions.js'
 import { OCBC_FORM_TEMPLATE } from './ocbc-form-template.js'
+import { MOCK_DB_QUESTIONS } from './mock-db.js'
 
 export const ROUTE_OPTIONS = {
   card_disputes:
@@ -42,6 +43,18 @@ const OCBC_QUESTIONS = Object.fromEntries(
   OCBC_FORM_TEMPLATE.questions.map(({ key, ...question }) => [key, question]),
 )
 
+const OCBC_DB_QUESTIONS = Object.fromEntries(
+  MOCK_DB_QUESTIONS.map(({ key, ...question }) => [
+    key,
+    { ...question, requiresDb: true },
+  ]),
+)
+
+export const OCBC_FORM_BENCHMARK_QUESTIONS = {
+  ...OCBC_QUESTIONS,
+  ...OCBC_DB_QUESTIONS,
+}
+
 export const QUESTION_PRESETS = {
   triage: {
     id: 'triage',
@@ -52,17 +65,22 @@ export const QUESTION_PRESETS = {
   ocbc_form: {
     id: 'ocbc_form',
     name: 'OCBC form category',
-    description: 'OCBC form check, completion status, product category, and action.',
-    questions: OCBC_QUESTIONS,
+    description:
+      'OCBC form check, completion status, product category, action, and optional mock DB checks.',
+    questions: OCBC_FORM_BENCHMARK_QUESTIONS,
   },
 }
 
 export function questionsForCase(caseDef) {
-  if (caseDef?.questions) return caseDef.questions
-  if (caseDef?.presetId && QUESTION_PRESETS[caseDef.presetId]) {
-    return QUESTION_PRESETS[caseDef.presetId].questions
-  }
-  return BENCHMARK_QUESTIONS
+  const questions =
+    caseDef?.questions ??
+    (caseDef?.presetId && QUESTION_PRESETS[caseDef.presetId]?.questions) ??
+    BENCHMARK_QUESTIONS
+
+  if (caseDef?.dbLookupKey) return questions
+  return Object.fromEntries(
+    Object.entries(questions).filter(([, question]) => !question.requiresDb),
+  )
 }
 
 export function answerOptions(question) {

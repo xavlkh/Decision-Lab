@@ -1,9 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
-import { FileText, Image as ImageIcon, Loader2, Paperclip, Play, Square, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Database,
+  FileText,
+  Image as ImageIcon,
+  Loader2,
+  Paperclip,
+  Pencil,
+  Play,
+  Square,
+  X,
+} from 'lucide-react'
 import { cn } from 'cn'
 import { AnswerCard } from '@/components/answer-card'
 import { ErrorBanner } from '@/components/error-banner'
+import { MockDbCheck } from '@/components/mock-db-check'
 import { QuestionEditor } from '@/components/question-editor'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -32,6 +44,14 @@ import {
   validateQuestions,
 } from '@/lib/decisions'
 import { OCBC_FORM_TEMPLATE } from '@/lib/ocbc-form-template'
+import {
+  FIELD_LABELS,
+  MOCK_DB_QUESTIONS,
+  analyzeMockDb,
+  buildDbContext,
+  scoreMockDb,
+} from '@/lib/mock-db'
+import { useMockCustomers } from '@/lib/mock-db-store'
 import {
   ACCEPT,
   IMAGE_MIME_TYPES,
@@ -251,10 +271,27 @@ const PRESETS = [
       },
     ],
   },
+  {
+    id: 'form-db-check',
+    name: 'Form accuracy (mock DB)',
+    mockDb: true,
+    input: `{
+  "form_type": "Account opening",
+  "customer_id": "CUST-1001",
+  "name": "Tan Wei Ming",
+  "nric": "S1234567A",
+  "email": "weiming.tan@example.com",
+  "phone": "+65 9123 4567",
+  "address": "12 Marina Boulevard, #08-01, Singapore 018982",
+  "monthly_income": 9200
+}`,
+    questions: MOCK_DB_QUESTIONS,
+  },
 ]
 
 function buildQuestions(preset) {
-  return preset.questions.map((question) => ({
+  const definitions = [...preset.questions, ...(preset.dbQuestions ?? [])]
+  return definitions.map((question) => ({
     ...question,
     id: makeId(),
     criteria: JSON.parse(JSON.stringify(question.criteria)),
@@ -273,7 +310,7 @@ function ResultMetrics({ result }) {
   )
 }
 
-export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
+export function PlaygroundPanel({ apiKey, hasKey, pushLog, onOpenMockDb }) {
   const [input, setInput] = useState(PRESETS[0].input)
   const [questions, setQuestions] = useState(() => buildQuestions(PRESETS[0]))
   const [result, setResult] = useState(null)
@@ -284,10 +321,20 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
   const [readingFiles, setReadingFiles] = useState(false)
   const [imageResolution, setImageResolution] = useState('low')
   const [dragging, setDragging] = useState(false)
+  const [useMockDb, setUseMockDb] = useState(Boolean(PRESETS[0].mockDb))
 
   const abortRef = useRef(null)
   const fileInputRef = useRef(null)
   const attachmentsRef = useRef([])
+
+  // Re-render when the mock DB changes so the live lookup below stays current.
+  useMockCustomers()
+
+  const dbAnalysis = useMockDb ? analyzeMockDb(input) : null
+  const missingDbQuestionCount = useMemo(
+    () => MOCK_DB_QUESTIONS.filter((question) => !questions.some((item) => item.key.trim() === question.key)).length,
+    [questions],
+  )
 
   useEffect(() => {
     attachmentsRef.current = attachments
@@ -320,8 +367,23 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
     clearAttachments()
     setInput(preset.input)
     setQuestions(buildQuestions(preset))
+    setUseMockDb(Boolean(preset.mockDb))
     setResult(null)
     setError(null)
+  }
+
+  function addMockDbQuestions() {
+    setQuestions((current) => {
+      const existing = new Set(current.map((question) => question.key.trim()))
+      const additions = MOCK_DB_QUESTIONS.filter((question) => !existing.has(question.key)).map(
+        (question) => ({
+          ...question,
+          id: makeId(),
+          criteria: JSON.parse(JSON.stringify(question.criteria)),
+        }),
+      )
+      return [...current, ...additions]
+    })
   }
 
   async function addFiles(fileList) {
@@ -421,9 +483,12 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
       return
     }
 
+    const analysis = useMockDb ? analyzeMockDb(input) : null
+    const submittedInput = analysis ? `${buildDbContext(analysis)}\n\n${input}` : input
+
     const blocks = []
-    if (input.trim()) {
-      blocks.push({ type: 'text', text: attachments.length > 0 ? `${input}\n` : input })
+    if (submittedInput.trim()) {
+      blocks.push({ type: 'text', text: submittedInput })
     }
 
     for (const attachment of attachments) {
@@ -443,7 +508,7 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
       }
     }
 
-    const inputPayload = attachments.length > 0 ? blocks : input
+    const inputPayload = attachments.length > 0 ? blocks : submittedInput
 
     setRunning(true)
     const controller = new AbortController()
@@ -456,7 +521,14 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
         questions: apiQuestions,
         signal: controller.signal,
       })
-      setResult({ ...response, questions: apiQuestions, hasMedia: attachments.length > 0 })
+      setResult({
+        ...response,
+        questions: apiQuestions,
+        hasMedia: attachments.length > 0,
+        db: analysis
+          ? { analysis, scores: scoreMockDb(analysis, response.answers) }
+          : null,
+      })
       pushLog({
         kind: 'playground',
         label: `Playground · ${Object.keys(apiQuestions).length} questions`,
@@ -530,6 +602,87 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
                   placeholder="Paste the text the model should judge, or attach a photo or PDF…"
                   className="min-h-40 resize-y"
                 />
+              </div>
+
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex cursor-pointer select-none items-center gap-2 text-xs font-medium">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-foreground"
+                      checked={useMockDb}
+                      disabled={running}
+                      onChange={(event) => setUseMockDb(event.target.checked)}
+                    />
+                    <Database className="size-3.5 text-muted-foreground" />
+                    Check against mock customer DB
+                  </label>
+                  {onOpenMockDb ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 px-2 text-[11px]"
+                      onClick={onOpenMockDb}
+                      disabled={running}
+                    >
+                      <Pencil className="size-3" />
+                      Edit DB
+                    </Button>
+                  ) : null}
+                </div>
+
+                {useMockDb ? (
+                  <div className="mt-2 space-y-1.5 pl-6">
+                    {dbAnalysis?.customer ? (
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge variant="secondary">Found {dbAnalysis.customer.customer_id}</Badge>
+                        <span className="text-muted-foreground">
+                          {dbAnalysis.customer.name}
+                          {dbAnalysis.matchedBy
+                            ? ` · matched by ${FIELD_LABELS[dbAnalysis.matchedBy]}`
+                            : ''}
+                        </span>
+                      </div>
+                    ) : dbAnalysis?.lookupAttempted ? (
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge variant="destructive">Not in DB</Badge>
+                        <span className="text-muted-foreground">
+                          {Object.values(dbAnalysis.identifiers).join(', ')}
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground">
+                        Add a customer ID, NRIC/FIN, or email to the text input. Attached files are
+                        not parsed for the lookup.
+                      </p>
+                    )}
+
+                    {dbAnalysis?.comparison ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        {dbAnalysis.comparison.comparedFields.length} form fields compared ·{' '}
+                        {dbAnalysis.comparison.mismatches.length === 0
+                          ? 'all match'
+                          : `${dbAnalysis.comparison.mismatches.length} mismatch${
+                              dbAnalysis.comparison.mismatches.length === 1 ? '' : 'es'
+                            }`}
+                      </p>
+                    ) : null}
+
+                    {missingDbQuestionCount > 0 ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={addMockDbQuestions}
+                        disabled={running}
+                      >
+                        Add {missingDbQuestionCount} DB question
+                        {missingDbQuestionCount === 1 ? '' : 's'}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <input
@@ -682,6 +835,10 @@ export function PlaygroundPanel({ apiKey, hasKey, pushLog }) {
 
       {result ? (
         <div className="space-y-3">
+          {result.db ? (
+            <MockDbCheck analysis={result.db.analysis} scores={result.db.scores} />
+          ) : null}
+
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 className="font-heading text-base font-medium">Answers</h2>

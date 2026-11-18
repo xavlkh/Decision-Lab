@@ -55,12 +55,15 @@ import {
   summarizeRuns,
 } from '@/lib/benchmark'
 import { loadCustomCases, saveCustomCases } from '@/lib/custom-case-store'
+import { useMockCustomers } from '@/lib/mock-db-store'
+import { analyzeMockDb, buildDbContext, mockDbExpected } from '@/lib/mock-db'
 import {
   createDecision,
   formatMs,
   formatPct,
   formatTokens,
   formatUsd,
+  toApiQuestion,
 } from '@/lib/decisions'
 import { readAsBase64 } from '@/lib/attachments'
 
@@ -164,6 +167,9 @@ function RunDetails({ run }) {
 }
 
 export function BenchmarkPanel({ apiKey, hasKey, pushLog }) {
+  // Re-render custom-case DB previews when the mock DB changes.
+  useMockCustomers()
+
   const [included, setIncluded] = useState(() =>
     Object.fromEntries(BENCHMARK_CASES.map((testCase) => [testCase.id, true])),
   )
@@ -195,6 +201,12 @@ export function BenchmarkPanel({ apiKey, hasKey, pushLog }) {
   const buckets = useMemo(() => calibrationBuckets(results), [results])
   const visibleResults = failuresOnly ? results.filter((run) => !run.pass) : results
   const previewQuestions = previewCase ? questionsForCase(previewCase) : {}
+  const previewDbAnalysis = previewCase?.dbLookupKey
+    ? analyzeMockDb(previewCase.dbLookupKey, previewCase.state ?? '')
+    : null
+  const previewExpected = previewCase
+    ? { ...previewCase.expected, ...mockDbExpected(previewDbAnalysis) }
+    : {}
 
   useEffect(() => {
     let active = true
@@ -350,16 +362,47 @@ export function BenchmarkPanel({ apiKey, hasKey, pushLog }) {
             current: repeatCount > 1 ? `${testCase.title} · run ${repeat}` : testCase.title,
           }))
 
+          const dbAnalysis = testCase.dbLookupKey
+            ? analyzeMockDb(testCase.dbLookupKey, testCase.state ?? '')
+            : null
+          const dbExpected = mockDbExpected(dbAnalysis)
+          const caseQuestions = questionsForCase(testCase)
+          const apiQuestions = Object.fromEntries(
+            Object.entries(caseQuestions).map(([id, question]) => [
+              id,
+              toApiQuestion(question),
+            ]),
+          )
+          const scoredCase = {
+            ...testCase,
+            questions: caseQuestions,
+            expected: { ...testCase.expected, ...dbExpected },
+          }
+
           try {
-            const input = await buildCaseInput(testCase)
+            let input = await buildCaseInput(testCase)
+
+            if (dbAnalysis) {
+              const context = buildDbContext(dbAnalysis)
+              if (Array.isArray(input)) {
+                const [first, ...rest] = input
+                input =
+                  first?.type === 'text'
+                    ? [{ ...first, text: `${context}\n\n${first.text}` }, ...rest]
+                    : [{ type: 'text', text: context }, ...input]
+              } else {
+                input = `${context}\n\n${input}`
+              }
+            }
+
             const response = await createDecision({
               apiKey,
               input,
-              questions: questionsForCase(testCase),
+              questions: apiQuestions,
               signal: controller.signal,
             })
 
-            const scored = scoreRun(testCase, response)
+            const scored = scoreRun(scoredCase, response)
             collected.push({ ...scored, run: repeat })
             setResults([...collected])
             setProgress((current) => ({ ...current, done: current.done + 1 }))
@@ -391,7 +434,7 @@ export function BenchmarkPanel({ apiKey, hasKey, pushLog }) {
               break runLoop
             }
 
-            collected.push({ ...scoreError(testCase, caught), run: repeat })
+            collected.push({ ...scoreError(scoredCase, caught), run: repeat })
             setResults([...collected])
             setProgress((current) => ({ ...current, done: current.done + 1 }))
             setError(caught)
@@ -851,6 +894,12 @@ export function BenchmarkPanel({ apiKey, hasKey, pushLog }) {
                   Media-only input.
                 </p>
               )}
+              {previewCase.dbLookupKey ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Mock DB context for “{previewCase.dbLookupKey}” is prepended at run
+                  time.
+                </p>
+              ) : null}
             </div>
 
             {previewCase.media?.length ? (
@@ -863,7 +912,7 @@ export function BenchmarkPanel({ apiKey, hasKey, pushLog }) {
             <div className="space-y-2">
               <h3 className="text-sm font-medium">Expected answers</h3>
               <div className="flex flex-wrap gap-1.5">
-                {Object.entries(previewCase.expected).map(([id, value]) => (
+                {Object.entries(previewExpected).map(([id, value]) => (
                   <Badge key={id} variant="outline">
                     {id} {expectedLabel(previewQuestions[id], value)}
                   </Badge>

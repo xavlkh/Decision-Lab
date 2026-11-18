@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   Loader2,
   Paperclip,
+  Pencil,
   Play,
   Square,
   X,
@@ -19,6 +20,7 @@ import { cn } from 'cn'
 import { AnswerCard } from '@/components/answer-card'
 import { ConfidenceBadge } from '@/components/confidence-badge'
 import { ErrorBanner } from '@/components/error-banner'
+import { MockDbCheck } from '@/components/mock-db-check'
 import { PreviewDialog, QuestionPreview } from '@/components/preview-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,6 +31,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import {
   Select,
@@ -66,12 +69,23 @@ import {
   toApiQuestion,
 } from '@/lib/decisions'
 import { OCBC_FORM_TEMPLATE } from '@/lib/ocbc-form-template'
+import {
+  DB_QUESTION_KEYS,
+  MOCK_DB_QUESTIONS,
+  analyzeMockDb,
+  buildDbContext,
+  scoreMockDb,
+} from '@/lib/mock-db'
+import { useMockCustomers } from '@/lib/mock-db-store'
 
 const LOW_CONFIDENCE = 0.6
 const MAX_BATCH_TOTAL_BYTES = 100 * 1024 * 1024
 
 const OCBC_QUESTIONS = Object.fromEntries(
   OCBC_FORM_TEMPLATE.questions.map((question) => [question.key, question]),
+)
+const OCBC_DB_QUESTIONS = Object.fromEntries(
+  MOCK_DB_QUESTIONS.map((question) => [question.key, question]),
 )
 const DOCUMENT_PROMPT = 'Review the attached OCBC personal banking form.'
 
@@ -98,6 +112,22 @@ function isFilledOf(result) {
   const probability = result.answers?.is_form_filled?.noul
   if (typeof probability !== 'number') return null
   return probability >= 0.5
+}
+
+function dbFoundOf(result) {
+  if (!result.db?.analysis) return null
+  return Boolean(result.db.analysis.customer)
+}
+
+function dbNoulOf(result, key) {
+  const probability = result.answers?.[key]?.noul
+  if (typeof probability !== 'number') return null
+  return probability >= 0.5
+}
+
+function dbLookupOf(result) {
+  if (!result.db?.analysis) return ''
+  return Object.values(result.db.analysis.identifiers).join(' ')
 }
 
 function reviewConfidence(result) {
@@ -143,7 +173,21 @@ function DocumentDetails({ result }) {
               answer={result.answers[question.key]}
             />
           ))}
+          {MOCK_DB_QUESTIONS.map((question) =>
+            result.answers[question.key] ? (
+              <AnswerCard
+                key={question.key}
+                id={question.key}
+                question={question}
+                answer={result.answers[question.key]}
+              />
+            ) : null,
+          )}
         </div>
+      ) : null}
+
+      {result.db ? (
+        <MockDbCheck analysis={result.db.analysis} scores={result.db.scores} />
       ) : null}
 
       {result.response ? (
@@ -160,7 +204,10 @@ function DocumentDetails({ result }) {
   )
 }
 
-export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
+export function DocumentsPanel({ apiKey, hasKey, pushLog, onOpenMockDb }) {
+  // Re-render the per-file lookup status when the mock DB changes.
+  useMockCustomers()
+
   const [files, setFiles] = useState([])
   const [fileError, setFileError] = useState(null)
   const [imageResolution, setImageResolution] = useState('low')
@@ -201,6 +248,12 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
     const entry = files.find((candidate) => candidate.id === id)
     if (entry) revokePreview(entry)
     setFiles((current) => current.filter((candidate) => candidate.id !== id))
+  }
+
+  function updateLookupKey(id, lookupKey) {
+    setFiles((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, lookupKey } : entry)),
+    )
   }
 
   function addFiles(fileList) {
@@ -244,6 +297,7 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
         size: file.size,
         kind: attachmentKind(mimeType),
         previewUrl: URL.createObjectURL(file),
+        lookupKey: '',
       })
     }
 
@@ -286,6 +340,9 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
         toApiQuestion(question),
       ]),
     )
+    const dbApiQuestions = Object.fromEntries(
+      MOCK_DB_QUESTIONS.map((question) => [question.key, toApiQuestion(question)]),
+    )
     const workerCount = Math.min(
       Math.max(1, Number(concurrency) || 1),
       runFiles.length,
@@ -324,6 +381,16 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
       try {
         const data = await readAsBase64(entry.file)
 
+        const lookupKey = entry.lookupKey?.trim() ?? ''
+        const lookup = lookupKey ? analyzeMockDb(lookupKey) : null
+        const dbAnalysis = lookup?.lookupAttempted ? lookup : null
+        const questionsForFile = dbAnalysis
+          ? { ...apiQuestions, ...dbApiQuestions }
+          : apiQuestions
+        const inputText = `${
+          dbAnalysis ? `${buildDbContext(dbAnalysis)}\n\n` : ''
+        }${DOCUMENT_PROMPT}\n`
+
         const mediaBlock =
           entry.kind === 'document'
             ? { type: 'document', data, mime_type: entry.mimeType }
@@ -336,11 +403,8 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
 
         const response = await createDecision({
           apiKey,
-          input: [
-            { type: 'text', text: `${DOCUMENT_PROMPT}\n` },
-            mediaBlock,
-          ],
-          questions: apiQuestions,
+          input: [{ type: 'text', text: inputText }, mediaBlock],
+          questions: questionsForFile,
           signal: controller.signal,
         })
 
@@ -351,7 +415,11 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
           mimeType: entry.mimeType,
           kind: entry.kind,
           size: entry.size,
+          lookupKey,
           ...response,
+          db: dbAnalysis
+            ? { analysis: dbAnalysis, scores: scoreMockDb(dbAnalysis, response.answers) }
+            : null,
         }
 
         setResults((current) =>
@@ -529,30 +597,60 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
       'is_ocbc_probability',
       'is_form_filled',
       'is_form_filled_probability',
+      'db_lookup',
+      'db_customer_found',
+      'customer_exists',
+      'customer_exists_probability',
+      'db_exists_match',
+      'form_accurate',
+      'form_accurate_probability',
+      'mismatched_field',
       'review_confidence',
       'latency_ms',
       'input_tokens',
     ]
 
-    const rows = results.map((result) => [
-      result.name,
-      result.error ? 'error' : 'done',
-      categoryOf(result) ?? '',
-      confidenceOf(result.answers?.form_category).toFixed(4),
-      actionOf(result) ?? '',
-      confidenceOf(result.answers?.form_action).toFixed(4),
-      isOcbcOf(result) === null ? '' : isOcbcOf(result) ? 'yes' : 'no',
-      typeof result.answers?.is_ocbc_form?.noul === 'number'
-        ? result.answers.is_ocbc_form.noul.toFixed(4)
-        : '',
-      isFilledOf(result) === null ? '' : isFilledOf(result) ? 'yes' : 'no',
-      typeof result.answers?.is_form_filled?.noul === 'number'
-        ? result.answers.is_form_filled.noul.toFixed(4)
-        : '',
-      reviewConfidence(result).toFixed(4),
-      result.elapsedMs,
-      result.usage?.total_input_tokens ?? 0,
-    ])
+    const rows = results.map((result) => {
+      const dbFound = dbFoundOf(result)
+      const customerExists = dbNoulOf(result, DB_QUESTION_KEYS.exists)
+      const formAccurate = dbNoulOf(result, DB_QUESTION_KEYS.accurate)
+
+      return [
+        result.name,
+        result.error ? 'error' : 'done',
+        categoryOf(result) ?? '',
+        confidenceOf(result.answers?.form_category).toFixed(4),
+        actionOf(result) ?? '',
+        confidenceOf(result.answers?.form_action).toFixed(4),
+        isOcbcOf(result) === null ? '' : isOcbcOf(result) ? 'yes' : 'no',
+        typeof result.answers?.is_ocbc_form?.noul === 'number'
+          ? result.answers.is_ocbc_form.noul.toFixed(4)
+          : '',
+        isFilledOf(result) === null ? '' : isFilledOf(result) ? 'yes' : 'no',
+        typeof result.answers?.is_form_filled?.noul === 'number'
+          ? result.answers.is_form_filled.noul.toFixed(4)
+          : '',
+        dbLookupOf(result),
+        dbFound === null ? '' : dbFound ? 'yes' : 'no',
+        customerExists === null ? '' : customerExists ? 'yes' : 'no',
+        typeof result.answers?.customer_exists?.noul === 'number'
+          ? result.answers.customer_exists.noul.toFixed(4)
+          : '',
+        dbFound === null || customerExists === null
+          ? ''
+          : customerExists === dbFound
+            ? 'yes'
+            : 'no',
+        formAccurate === null ? '' : formAccurate ? 'yes' : 'no',
+        typeof result.answers?.form_accurate?.noul === 'number'
+          ? result.answers.form_accurate.noul.toFixed(4)
+          : '',
+        result.answers?.mismatched_field?.choice ?? '',
+        reviewConfidence(result).toFixed(4),
+        result.elapsedMs,
+        result.usage?.total_input_tokens ?? 0,
+      ]
+    })
 
     const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n')
 
@@ -574,7 +672,16 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
         file: result.name,
         mimeType: result.mimeType,
         size: result.size,
+        lookupKey: result.lookupKey ?? '',
         answers: result.answers,
+        database: result.db
+          ? {
+              lookup: result.db.analysis.identifiers,
+              matchedBy: result.db.analysis.matchedBy,
+              customer: result.db.analysis.customer,
+              scores: result.db.scores,
+            }
+          : null,
         usage: result.usage,
         elapsedMs: result.elapsedMs,
         error: result.error,
@@ -599,8 +706,8 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
               <CardTitle>OCBC form documents</CardTitle>
               <CardDescription>
                 Each file is sent in its own request and reviewed for completion,
-                category, and action. This is not a combined batch and has no
-                ground-truth accuracy score.
+                category, and action. Add an optional customer ID, NRIC/FIN, or
+                email to a file to check it against the mock customer database.
               </CardDescription>
             </div>
             <Badge variant="outline" className="font-mono">
@@ -616,6 +723,7 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
                 {question.key} · {question.type}
               </Badge>
             ))}
+            <Badge variant="secondary">+3 DB questions with a lookup key</Badge>
             <Badge variant="secondary">$0.10 / 1M input</Badge>
             <Badge variant="secondary">0 output tokens</Badge>
           </div>
@@ -696,13 +804,40 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
               </span>
             </div>
 
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                Optional: set a customer ID, NRIC/FIN, or email per file to add the three
+                mock DB questions to that file's request.
+              </p>
+              {onOpenMockDb ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-[11px]"
+                  onClick={onOpenMockDb}
+                  disabled={running}
+                >
+                  <Pencil className="size-3" />
+                  Edit DB
+                </Button>
+              ) : null}
+            </div>
+
             {files.length > 0 ? (
               <div className="mt-3 max-h-64 space-y-2 overflow-auto pr-1">
-                {files.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="flex items-center gap-3 rounded-lg border bg-card p-2"
-                  >
+                {files.map((entry) => {
+                  const lookup = entry.lookupKey?.trim()
+                    ? analyzeMockDb(entry.lookupKey)
+                    : null
+                  const lookupAttempted = Boolean(lookup?.lookupAttempted)
+                  const lookupCustomer = lookup?.customer ?? null
+
+                  return (
+                    <div
+                      key={entry.id}
+                      className="flex items-center gap-3 rounded-lg border bg-card p-2"
+                    >
                     {entry.kind === 'image' && entry.previewUrl ? (
                       <img
                         src={entry.previewUrl}
@@ -730,6 +865,36 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
                         {statusById[entry.id] === 'queued' ? ' · queued' : ''}
                         {statusById[entry.id] === 'cancelled' ? ' · cancelled' : ''}
                       </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <Input
+                          value={entry.lookupKey ?? ''}
+                          onChange={(event) => updateLookupKey(entry.id, event.target.value)}
+                          placeholder="Customer ID / NRIC / email"
+                          aria-label={`DB lookup key for ${entry.name}`}
+                          className="h-7 w-56 text-xs"
+                          disabled={running}
+                        />
+                        {lookupAttempted ? (
+                          <span
+                            className={cn(
+                              'text-[11px]',
+                              lookupCustomer
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-rose-600 dark:text-rose-400',
+                            )}
+                          >
+                            {lookupCustomer
+                              ? `Found ${lookupCustomer.customer_id}`
+                              : 'Not in DB'}
+                          </span>
+                        ) : entry.lookupKey?.trim() ? (
+                          <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                            Unrecognized key
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">Optional</span>
+                        )}
+                      </div>
                     </div>
 
                     <Button
@@ -762,8 +927,9 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
                     >
                       <X />
                     </Button>
-                  </div>
-                ))}
+                    </div>
+                  )
+                })}
               </div>
             ) : null}
 
@@ -970,6 +1136,21 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
                                 {result.kind === 'document' ? 'PDF' : 'Image'} ·{' '}
                                 {formatBytes(result.size)}
                               </p>
+                              {result.db ? (
+                                <p
+                                  className={cn(
+                                    'text-[11px]',
+                                    result.db.analysis.customer
+                                      ? 'text-emerald-600 dark:text-emerald-400'
+                                      : 'text-rose-600 dark:text-rose-400',
+                                  )}
+                                >
+                                  DB:{' '}
+                                  {result.db.analysis.customer
+                                    ? `found ${result.db.analysis.customer.customer_id}`
+                                    : 'not found'}
+                                </p>
+                              ) : null}
                             </TableCell>
 
                             <TableCell>
@@ -1150,11 +1331,24 @@ export function DocumentsPanel({ apiKey, hasKey, pushLog }) {
               <pre className="whitespace-pre-wrap rounded-lg bg-muted/60 p-3 font-mono text-[11px]">
                 {DOCUMENT_PROMPT}
               </pre>
+              {previewFile.lookupKey?.trim() ? (
+                <p className="text-[11px] text-muted-foreground">
+                  A mock customer database block for “{previewFile.lookupKey}” is prepended at
+                  run time.
+                </p>
+              ) : null}
             </div>
 
             <div className="space-y-2">
               <h3 className="text-sm font-medium">Questions</h3>
-              <QuestionPreview questions={OCBC_QUESTIONS} />
+              <QuestionPreview
+                questions={{ ...OCBC_QUESTIONS, ...OCBC_DB_QUESTIONS }}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {DB_QUESTION_KEYS.exists}, {DB_QUESTION_KEYS.accurate}, and{' '}
+                {DB_QUESTION_KEYS.mismatch} are only sent when that file has a DB lookup
+                key.
+              </p>
             </div>
           </div>
         ) : null}

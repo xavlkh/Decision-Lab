@@ -31,6 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { expectedLabel, QUESTION_PRESETS, questionsForCase } from '@/lib/benchmark'
+import { analyzeMockDb, mockDbExpected } from '@/lib/mock-db'
 
 export function CustomCasesCard({
   cases,
@@ -131,6 +132,13 @@ export function CustomCasesCard({
               <TableBody>
                 {cases.map((testCase) => {
                   const questions = questionsForCase(testCase)
+                  const dbAnalysis = testCase.dbLookupKey
+                    ? analyzeMockDb(testCase.dbLookupKey, testCase.state ?? '')
+                    : null
+                  const expected = {
+                    ...testCase.expected,
+                    ...mockDbExpected(dbAnalysis),
+                  }
                   const images = testCase.media?.filter((item) => item.kind === 'image').length ?? 0
                   const documents =
                     testCase.media?.filter((item) => item.kind === 'document').length ?? 0
@@ -155,6 +163,11 @@ export function CustomCasesCard({
                           <Badge variant="secondary">
                             {QUESTION_PRESETS[testCase.presetId]?.name ?? 'Support triage'}
                           </Badge>
+                          {testCase.dbLookupKey ? (
+                            <Badge variant="outline" className="font-mono">
+                              DB {testCase.dbLookupKey}
+                            </Badge>
+                          ) : null}
                           {images > 0 ? (
                             <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
                               <ImageIcon className="size-3" />
@@ -175,7 +188,7 @@ export function CustomCasesCard({
 
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
-                          {Object.entries(testCase.expected).map(([id, value]) => (
+                          {Object.entries(expected).map(([id, value]) => (
                             <Badge key={id} variant="outline">
                               {id} {expectedLabel(questions[id], value)}
                             </Badge>

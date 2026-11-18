@@ -1,0 +1,48 @@
+[
+  {
+    "customer_id": "CUST-1001",
+    "name": "Tan Wei Ming",
+    "nric": "S1234567A",
+    "email": "weiming.tan@example.com",
+    "phone": "+65 9123 4567",
+    "address": "12 Marina Boulevard, #08-01, Singapore 018982",
+    "monthly_income": 8500,
+    "account_number": "123-456789-001"
+  },
+  {
+    "customer_id": "CUST-1002",
+    "name": "Nur Aisyah Binte Rahman",
+    "nric": "S2345678B",
+    "email": "aisyah.rahman@example.com",
+    "phone": "+65 8234 5678",
+    "address": "45 Tampines Avenue 5, #12-345, Singapore 529691",
+    "monthly_income": 6200
+  },
+  {
+    "customer_id": "CUST-1003",
+    "name": "Arjun s/o Ramesh",
+    "nric": "S3456789C",
+    "email": "arjun.ramesh@example.com",
+    "phone": "+65 9345 6789",
+    "address": "8 Jurong East Street 21, #05-12, Singapore 609601",
+    "monthly_income": 10400
+  },
+  {
+    "customer_id": "CUST-1004",
+    "name": "Lim Hui Ling",
+    "nric": "S4567890D",
+    "email": "huiling.lim@example.com",
+    "phone": "+65 8456 7890",
+    "address": "77 Bedok North Road, #03-08, Singapore 460077",
+    "monthly_income": 7350
+  },
+  {
+    "customer_id": "CUST-1005",
+    "name": "Daniel Ong Jia Hao",
+    "nric": "S5678901E",
+    "email": "daniel.ong@example.com",
+    "phone": "+65 9567 8901",
+    "address": "21 Woodlands Drive 16, #14-02, Singapore 737883",
+    "monthly_income": 4800
+  }
+]

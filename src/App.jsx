@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiKeyBar } from '@/components/api-key-bar'
 import { BenchmarkPanel } from '@/components/benchmark-panel'
 import { DocumentsPanel } from '@/components/documents-panel'
+import { MockDbPanel } from '@/components/mock-db-panel'
 import { PlaygroundPanel } from '@/components/playground-panel'
 import { RequestLog } from '@/components/request-log'
 import { Badge } from '@/components/ui/badge'
@@ -156,6 +157,7 @@ export default function App() {
               <TabsTrigger value="playground">Playground</TabsTrigger>
               <TabsTrigger value="documents">Documents</TabsTrigger>
               <TabsTrigger value="benchmark">Benchmark</TabsTrigger>
+              <TabsTrigger value="mock-db">Mock DB</TabsTrigger>
               <TabsTrigger value="log">
                 Request log{logs.length > 0 ? ` (${logs.length})` : ''}
               </TabsTrigger>
@@ -174,6 +176,7 @@ export default function App() {
               apiKey={effectiveKey}
               hasKey={Boolean(effectiveKey)}
               pushLog={pushLog}
+              onOpenMockDb={() => setTab('mock-db')}
             />
           </TabsContent>
 
@@ -198,7 +201,12 @@ export default function App() {
               apiKey={effectiveKey}
               hasKey={Boolean(effectiveKey)}
               pushLog={pushLog}
+              onOpenMockDb={() => setTab('mock-db')}
             />
+          </TabsContent>
+
+          <TabsContent value="mock-db" className="mt-4">
+            <MockDbPanel />
           </TabsContent>
 
           <TabsContent value="log" className="mt-4">

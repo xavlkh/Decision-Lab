@@ -6,13 +6,30 @@
  *
  * Use it with text, a screenshot, or a PDF of the form.
  */
+import { MOCK_DB_QUESTIONS } from './mock-db.js'
+
 export const OCBC_FORM_TEMPLATE = {
   id: 'ocbc-form-category',
   name: 'OCBC form category',
   description:
     'Review an OCBC personal banking form for completion status, product category, and action.',
-  input:
-    'OCBC form: Change of Address / Contact Details\n\nUse this form to update the mailing address and contact number on my personal account.',
+  // The Playground enables the mock customer DB for this template by default.
+  // The base question set stays unchanged for benchmarks and ungrounded reviews.
+  mockDb: true,
+  dbQuestions: MOCK_DB_QUESTIONS,
+  input: `{
+  "bank": "OCBC",
+  "form_type": "Change of Address / Contact Details",
+  "customer_id": "CUST-1001",
+  "name": "Tan Wei Ming",
+  "nric": "S1234567A",
+  "email": "weiming.tan@example.com",
+  "phone": "+65 9123 4567",
+  "address": "12 Marina Boulevard, #08-01, Singapore 018982",
+  "account_number": "123-456789-001",
+  "signature": "Tan Wei Ming",
+  "date": "2026-11-18"
+}`,
   questions: [
     {
       key: 'is_ocbc_form',

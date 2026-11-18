@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Paperclip } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,7 +30,8 @@ import {
   isSupportedMimeType,
   resolveMimeType,
 } from '@/lib/attachments'
-import { QUESTION_PRESETS, answerOptions } from '@/lib/benchmark'
+import { QUESTION_PRESETS, answerOptions, expectedLabel } from '@/lib/benchmark'
+import { analyzeMockDb, mockDbExpected } from '@/lib/mock-db'
 import { formatBytes } from '@/lib/decisions'
 
 function newCaseId() {
@@ -48,15 +49,31 @@ export function CustomCaseDialog({ open, onOpenChange, caseDef, onSave }) {
     caseDef?.presetId && QUESTION_PRESETS[caseDef.presetId] ? caseDef.presetId : 'triage',
   )
   const [expected, setExpected] = useState(caseDef?.expected ?? {})
+  const [dbLookupKey, setDbLookupKey] = useState(caseDef?.dbLookupKey ?? '')
   const [media, setMedia] = useState(caseDef?.media ?? [])
   const [fileError, setFileError] = useState(null)
   const fileInputRef = useRef(null)
 
   const preset = QUESTION_PRESETS[presetId]
   const questions = preset.questions
-  const missing = Object.keys(questions).filter((id) => expected[id] === undefined)
+  const baseQuestions = Object.fromEntries(
+    Object.entries(questions).filter(([, question]) => !question.requiresDb),
+  )
+  const dbQuestions = Object.fromEntries(
+    Object.entries(questions).filter(([, question]) => question.requiresDb),
+  )
+  const isOcbc = presetId === 'ocbc_form'
+  const activeDbKey = isOcbc ? dbLookupKey.trim() : ''
+  const dbAnalysis = useMemo(
+    () => (activeDbKey ? analyzeMockDb(activeDbKey, state) : null),
+    [activeDbKey, state],
+  )
+  const dbExpected = useMemo(() => mockDbExpected(dbAnalysis), [dbAnalysis])
+  const missing = Object.keys(baseQuestions).filter((id) => expected[id] === undefined)
   const hasInput = state.trim().length > 0 || media.length > 0
-  const canSave = title.trim().length > 0 && hasInput && missing.length === 0
+  const dbKeyValid = !activeDbKey || Boolean(dbAnalysis?.lookupAttempted)
+  const canSave =
+    title.trim().length > 0 && hasInput && missing.length === 0 && dbKeyValid
   const totalBytes = media.reduce((sum, item) => sum + item.size, 0)
 
   function handleAddFiles(event) {
@@ -135,6 +152,12 @@ export function CustomCaseDialog({ open, onOpenChange, caseDef, onSave }) {
   function handleSave() {
     if (!canSave) return
 
+    const baseExpected = Object.fromEntries(
+      Object.keys(baseQuestions)
+        .filter((id) => expected[id] !== undefined)
+        .map((id) => [id, expected[id]]),
+    )
+
     onSave({
       id: caseDef?.id ?? newCaseId(),
       custom: true,
@@ -142,7 +165,8 @@ export function CustomCaseDialog({ open, onOpenChange, caseDef, onSave }) {
       tag: tag.trim() || 'Custom',
       state: state.trim(),
       presetId,
-      expected,
+      dbLookupKey: activeDbKey,
+      expected: baseExpected,
       media,
     })
   }
@@ -258,6 +282,80 @@ export function CustomCaseDialog({ open, onOpenChange, caseDef, onSave }) {
             <p className="text-[11px] text-muted-foreground">{preset.description}</p>
           </div>
 
+          {isOcbc ? (
+            <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="custom-case-db-key">Mock DB lookup key (optional)</Label>
+                <Input
+                  id="custom-case-db-key"
+                  value={dbLookupKey}
+                  onChange={(event) => setDbLookupKey(event.target.value)}
+                  placeholder="CUST-1001, NRIC/FIN, or email"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Adds customer_exists, form_accurate, and mismatched_field. Ground truth
+                  is computed from the current mock DB and the input text.
+                </p>
+              </div>
+
+              {activeDbKey ? (
+                <div className="space-y-1.5 text-[11px]">
+                  {dbAnalysis?.customer ? (
+                    <p className="text-emerald-600 dark:text-emerald-400">
+                      Found {dbAnalysis.customer.customer_id} ·{' '}
+                      {dbAnalysis.customer.name}
+                    </p>
+                  ) : dbAnalysis?.lookupAttempted ? (
+                    <p className="text-rose-600 dark:text-rose-400">
+                      No customer matched “{activeDbKey}”.
+                    </p>
+                  ) : (
+                    <p className="text-amber-600 dark:text-amber-400">
+                      Key not recognized. Use a customer ID, NRIC/FIN, or email.
+                    </p>
+                  )}
+
+                  {dbAnalysis?.comparison ? (
+                    <p className="text-muted-foreground">
+                      {dbAnalysis.comparison.comparedFields.length} form fields compared ·{' '}
+                      {dbAnalysis.comparison.mismatches.length === 0
+                        ? 'all match'
+                        : `${dbAnalysis.comparison.mismatches.length} mismatch${
+                            dbAnalysis.comparison.mismatches.length === 1 ? '' : 'es'
+                          }`}
+                    </p>
+                  ) : dbAnalysis?.customer ? (
+                    <p className="text-muted-foreground">
+                      No comparable form fields in the text input, so only customer_exists
+                      will be scored.
+                    </p>
+                  ) : null}
+
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {Object.entries(dbQuestions).map(([id, question]) => {
+                      const value = dbExpected[id]
+                      return (
+                        <Badge
+                          key={id}
+                          variant={value === undefined ? 'outline' : 'secondary'}
+                        >
+                          {id}{' '}
+                          {value === undefined
+                            ? 'not scored'
+                            : expectedLabel(question, value)}
+                        </Badge>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  Leave blank to run only the standard OCBC questions.
+                </p>
+              )}
+            </div>
+          ) : null}
+
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Label>Expected answers</Label>
@@ -269,7 +367,7 @@ export function CustomCaseDialog({ open, onOpenChange, caseDef, onSave }) {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              {Object.entries(questions).map(([id, question]) => (
+              {Object.entries(baseQuestions).map(([id, question]) => (
                 <div key={id} className="space-y-1.5 rounded-lg border bg-muted/20 p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-xs font-medium">{id}</span>
