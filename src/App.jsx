@@ -7,9 +7,10 @@ import { PlaygroundPanel } from '@/components/playground-panel'
 import { RequestLog } from '@/components/request-log'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { createDecision, formatMs, formatTokens } from '@/lib/decisions'
+import { createDecision, formatMs, formatTokens, PROXY_AVAILABLE } from '@/lib/decisions'
 
-const ENV_KEY = (import.meta.env.VITE_GEMINI_API_KEY ?? '').trim()
+const FORCE_PROXY = import.meta.env.VITE_USE_PROXY === 'true'
+const ENV_KEY = FORCE_PROXY ? '' : (import.meta.env.GEMINI_API_KEY ?? '').trim()
 const STORAGE_KEY = 'gemini-decision-lab-key'
 
 function makeId() {
@@ -40,6 +41,7 @@ export default function App() {
   }, [sessionKey])
 
   const effectiveKey = sessionKey.trim() || ENV_KEY
+  const canUseApi = Boolean(effectiveKey) || PROXY_AVAILABLE
 
   const pushLog = useCallback((entry) => {
     const next = { id: makeId(), at: Date.now(), ...entry }
@@ -65,7 +67,7 @@ export default function App() {
   }
 
   async function testKey() {
-    if (!effectiveKey) return
+    if (!canUseApi) return
 
     setTesting(true)
     setTestResult(null)
@@ -84,7 +86,9 @@ export default function App() {
 
       setTestResult({
         ok: true,
-        message: `Connected in ${formatMs(result.elapsedMs)} · ${formatTokens(
+        message: `${
+          effectiveKey ? 'Connected' : 'Connected via server proxy'
+        } in ${formatMs(result.elapsedMs)} Â· ${formatTokens(
           result.usage?.total_input_tokens ?? 0,
         )} input tokens`,
       })
@@ -134,7 +138,7 @@ export default function App() {
             <Badge variant="outline" className="font-mono">
               gemini-decision-1
             </Badge>
-            <span className="text-[11px] text-muted-foreground">Decisions API · v1beta</span>
+            <span className="text-[11px] text-muted-foreground">Decisions API Â· v1beta</span>
           </div>
         </div>
       </header>
@@ -144,6 +148,7 @@ export default function App() {
         onChange={handleKeyChange}
         envKey={ENV_KEY}
         effectiveKey={effectiveKey}
+        proxyAvailable={PROXY_AVAILABLE}
         onClear={clearKey}
         onTest={testKey}
         testing={testing}
@@ -163,7 +168,7 @@ export default function App() {
               </TabsTrigger>
             </TabsList>
             <p className="text-xs text-muted-foreground">
-              $0.10 / 1M input tokens · output tokens always 0
+              $0.10 / 1M input tokens Â· output tokens always 0
             </p>
           </div>
 
@@ -174,7 +179,7 @@ export default function App() {
           >
             <PlaygroundPanel
               apiKey={effectiveKey}
-              hasKey={Boolean(effectiveKey)}
+              hasKey={canUseApi}
               pushLog={pushLog}
               onOpenMockDb={() => setTab('mock-db')}
             />
@@ -187,7 +192,7 @@ export default function App() {
           >
             <BenchmarkPanel
               apiKey={effectiveKey}
-              hasKey={Boolean(effectiveKey)}
+              hasKey={canUseApi}
               pushLog={pushLog}
             />
           </TabsContent>
@@ -199,7 +204,7 @@ export default function App() {
           >
             <DocumentsPanel
               apiKey={effectiveKey}
-              hasKey={Boolean(effectiveKey)}
+              hasKey={canUseApi}
               pushLog={pushLog}
               onOpenMockDb={() => setTab('mock-db')}
             />

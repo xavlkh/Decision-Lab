@@ -1,5 +1,9 @@
 export const MODEL = 'gemini-decision-1'
 export const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/decisions'
+export const PROXY_ENDPOINT = '/api/decisions'
+export const PROXY_AVAILABLE =
+  import.meta.env.PROD || import.meta.env.VITE_USE_PROXY === 'true'
+export const MAX_PROXY_BYTES = 4_200_000
 export const INPUT_COST_PER_TOKEN = 0.1 / 1_000_000
 export const CONFIDENCE_LABELS = ['0.5-0.6', '0.6-0.7', '0.7-0.8', '0.8-0.9', '0.9-1.0']
 
@@ -52,6 +56,14 @@ function friendlyMessage(message, { status, code }) {
     return message || 'The request was rejected as invalid. Check the question keys, criteria, and input.'
   }
 
+  if (code === 'missing_server_key') {
+    return 'The deployed server has no Gemini key configured. Set GEMINI_API_KEY in Vercel and redeploy.'
+  }
+
+  if (status === 413 || code === 'payload_too_large') {
+    return 'The request is too large for the server proxy. Paste your own Gemini key in the key bar for large files, or use a smaller attachment.'
+  }
+
   return message || 'The Decisions API request failed.'
 }
 
@@ -93,9 +105,11 @@ export function summarizeRequest(payload) {
  * Resolves with { request, response, answers, usage, elapsedMs }.
  */
 export async function createDecision({ apiKey, input, questions, signal }) {
-  if (!apiKey) {
+  const useProxy = !apiKey && PROXY_AVAILABLE
+
+  if (!apiKey && !useProxy) {
     throw new DecisionError(
-      'No Gemini API key. Paste one in the key bar or set VITE_GEMINI_API_KEY in .env.',
+      'No Gemini API key. Paste one in the key bar or set GEMINI_API_KEY in .env.',
       { code: 'missing_key' },
     )
   }
@@ -115,23 +129,37 @@ export async function createDecision({ apiKey, input, questions, signal }) {
   }
 
   const payload = { model: MODEL, input: normalizedInput, questions }
+  const requestBody = JSON.stringify(payload)
+
+  if (useProxy) {
+    const bytes = new TextEncoder().encode(requestBody).length
+    if (bytes > MAX_PROXY_BYTES) {
+      throw new DecisionError(
+        `This request is ${formatBytes(bytes)}. The shared server proxy accepts about 4 MB; paste your own Gemini key in the key bar to send larger files directly.`,
+        { code: 'proxy_too_large' },
+      )
+    }
+  }
+
   const started = performance.now()
   let response
 
   try {
-    response = await fetch(ENDPOINT, {
+    response = await fetch(useProxy ? PROXY_ENDPOINT : ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+        ...(useProxy ? {} : { 'x-goog-api-key': apiKey }),
       },
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
     })
   } catch (error) {
     if (error?.name === 'AbortError') throw error
     throw new DecisionError(
-      'Could not reach generativelanguage.googleapis.com. Check your connection, then retry.',
+      useProxy
+        ? 'Could not reach the server proxy. Check the deployment, then retry.'
+        : 'Could not reach generativelanguage.googleapis.com. Check your connection, then retry.',
       { code: 'network', details: String(error?.message ?? error) },
     )
   }

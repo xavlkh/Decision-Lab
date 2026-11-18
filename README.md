@@ -10,7 +10,7 @@ The Decisions API returns calibrated probabilities instead of generated text. Th
 2. Add it to `.env` (already gitignored) or paste it into the app's key bar:
 
    ```bash
-   VITE_GEMINI_API_KEY=AIza...
+   GEMINI_API_KEY=AIza...
    ```
 
 3. Install and run:
@@ -22,7 +22,7 @@ The Decisions API returns calibrated probabilities instead of generated text. Th
 
 4. Open <http://localhost:5173>.
 
-The UI value wins over `.env`. A key pasted into the UI is stored in `sessionStorage` and disappears when the tab closes.
+The UI value wins over `.env`. A key pasted into the UI is stored in `sessionStorage` and disappears when the tab closes. On a Vercel deployment, leave it blank to use the server-side proxy.
 
 ## What to try
 
@@ -96,30 +96,50 @@ The built-in cases are text-only. Media support is available through custom case
 
 ## Deploy on Vercel
 
-This is a static Vite app. The repository includes `vercel.json`, which sets the Vite framework, build command, and output directory.
+The app is a Vite frontend plus a server-side proxy in `api/decisions.js`. The key stays on the server; the browser calls `/api/decisions` when no user key is present.
 
-- **Dashboard:** import the repository at <https://vercel.com/new>. Vercel uses `npm run build` and publishes `dist`.
+- **Dashboard:** import the repository at <https://vercel.com/new>. Vercel builds with `npm run build`, publishes `dist`, and deploys the API function.
 - **CLI:** run `npx vercel` from the project root for a preview, then `npx vercel --prod` for production.
-- **Environment variables:** none are required. Do not add `VITE_GEMINI_API_KEY` to Vercel. Production builds only expose `BUILD_*`, and visitors paste their own key into the key bar; it stays in `sessionStorage` for that tab.
+- **Environment variable:** set **`GEMINI_API_KEY`** in Vercel for Production and Preview. Do not add a `VITE_` or `BUILD_` prefix to it. Remove any old `VITE_GEMINI_API_KEY` entry; it is no longer used. The same variable name is used in local `.env`.
+- **How it works:** with no key in the key bar, the browser sends the request to `/api/decisions`; the function attaches `GEMINI_API_KEY` and forwards it to Google. The key never enters the client bundle.
+- **Large files:** Vercel Functions have a 4.5 MB request body limit, and base64 expands files by about a third. Requests over roughly 3 MB of source media must use a visitor-supplied key in the key bar, which calls Google directly.
+- **Build requirement:** use a normal Vercel build. A prebuilt static-only deployment will not include the API function.
+- `vercel.json` sets `maxDuration: 60` for the function.
 - `.vercelignore` excludes `.env`, `.env.*`, `node_modules`, and `dist` from CLI uploads.
-- The Decisions API allows browser requests from Vercel deployment origins, so no server proxy is needed for direct calls.
 
-For a shared key that every visitor can use, do not ship it to the browser. Use a server-side proxy with authentication, rate limits, and a spend cap.
+For local proxy testing, keep `GEMINI_API_KEY` in `.env`, set `VITE_USE_PROXY=true` for the dev command, then run `npx vercel dev`:
+
+```powershell
+$env:VITE_USE_PROXY='true'
+npx vercel dev
+```
+
+On macOS/Linux, prefix the command instead:
+
+```bash
+VITE_USE_PROXY=true npx vercel dev
+```
+
+`.env.example` is the template; copy it to `.env`. When the flag is set, the dev UI ignores the env key and sends requests through the function. `npm run dev` alone serves only the Vite frontend.
+
+**Security:** the proxy is reachable from the deployed site. Set a quota or spend cap on the Gemini key, and add rate limiting if the deployment is public. The same-origin check blocks cross-site browser calls, but it is not authentication against direct server requests.
 
 ## Notes
 
 - Endpoint: `POST https://generativelanguage.googleapis.com/v1beta/decisions`
 - Model: `gemini-decision-1`
 - Pricing: $0.10 per 1M input tokens, output tokens are free.
-- `VITE_*` values are inlined into the client bundle. This is fine for local testing; don't deploy a real key.
-- Production builds expose only `BUILD_*` env vars, so `VITE_GEMINI_API_KEY` from `.env` is never inlined into `dist`.
+- Local dev exposes `GEMINI_API_KEY` to the Vite dev bundle so the UI can use it. Production builds expose only `BUILD_*`, so the key is never inlined into `dist`.
+- Local proxy testing uses `VITE_USE_PROXY=true`; on Vercel the proxy is used automatically in production.
+- The server proxy reads `GEMINI_API_KEY` at request time. It is never sent to the browser.
 - The API supports images, audio, video, and PDFs. The Playground accepts **PNG, JPEG, WebP, HEIC, GIF, BMP, TIFF, and PDF**: up to 5 files, 15 MB each, 30 MB total. The Documents tab accepts up to 20 files, 15 MB each. Custom benchmark cases accept up to 5 files, 15 MB each, 30 MB total. Images use the selected `low` / `medium` / `high` detail level. Built-in benchmark cases remain text-only.
+- On Vercel, large media that exceeds the proxy limit needs a visitor-supplied key in the key bar.
 
 ## Scripts
 
 ```bash
-npm run dev      # start Vite
+npm run dev      # start Vite (frontend only)
 npm run build    # production build
 npm run lint     # oxlint
-npm run preview  # preview the build
+npm run preview  # preview the static build (no API function)
 ```

@@ -6,9 +6,9 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
-  // Dev reads VITE_* from .env. Production builds expose only BUILD_* so a
-  // developer key can never be inlined into the client bundle.
-  envPrefix: mode === 'production' ? 'BUILD_' : 'VITE_',
+  // Local development can read VITE_* and GEMINI_* from .env. Every build mode
+  // exposes only BUILD_* so GEMINI_API_KEY can never be inlined into the client.
+  envPrefix: mode === 'development' ? ['VITE_', 'GEMINI_'] : 'BUILD_',
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

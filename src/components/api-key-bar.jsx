@@ -10,13 +10,20 @@ export function ApiKeyBar({
   onChange,
   envKey,
   effectiveKey,
+  proxyAvailable,
   onClear,
   onTest,
   testing,
   testResult,
 }) {
   const [visible, setVisible] = useState(false)
-  const source = value.trim() ? 'session' : envKey ? 'env' : 'none'
+  const source = value.trim()
+    ? 'session'
+    : envKey
+      ? 'env'
+      : proxyAvailable
+        ? 'proxy'
+        : 'none'
 
   return (
     <div className="border-y bg-muted/20">
@@ -32,7 +39,11 @@ export function ApiKeyBar({
             value={value}
             onChange={(event) => onChange(event.target.value)}
             placeholder={
-              envKey ? 'Using VITE_GEMINI_API_KEY from .env' : 'Paste an AI Studio key'
+              envKey
+                ? 'Using GEMINI_API_KEY from .env'
+                : proxyAvailable
+                  ? 'Optional: paste a key to override the proxy'
+                  : 'Paste an AI Studio key'
             }
             autoComplete="off"
             spellCheck={false}
@@ -53,10 +64,10 @@ export function ApiKeyBar({
           size="sm"
           variant="outline"
           onClick={onTest}
-          disabled={!effectiveKey || testing}
+          disabled={(!effectiveKey && !proxyAvailable) || testing}
         >
           {testing ? <Loader2 className="animate-spin" /> : <KeyRound />}
-          {testing ? 'Testing' : 'Test key'}
+          {testing ? 'Testing' : 'Test connection'}
         </Button>
 
         {value ? (
@@ -65,9 +76,29 @@ export function ApiKeyBar({
           </Button>
         ) : null}
 
-        <Badge variant={source === 'session' ? 'secondary' : 'outline'} className="text-[11px]">
-          {source === 'session' ? 'this tab' : source === 'env' ? 'from .env' : 'no key'}
+        <Badge
+          variant={source === 'session' ? 'secondary' : 'outline'}
+          className="text-[11px]"
+          title={
+            source === 'proxy'
+              ? 'Requests use the server-side key through /api/decisions.'
+              : undefined
+          }
+        >
+          {source === 'session'
+            ? 'this tab'
+            : source === 'env'
+              ? 'from .env'
+              : source === 'proxy'
+                ? 'server proxy'
+                : 'no key'}
         </Badge>
+
+        {source === 'proxy' ? (
+          <span className="text-[11px] text-muted-foreground">
+            Shared key · up to ~4 MB; paste your own for larger files
+          </span>
+        ) : null}
 
         {testResult ? (
           <span
